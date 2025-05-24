@@ -1,0 +1,11 @@
+This is the first version of the Crypto Campaign.
+
+It has the capability of creating a campaign, donating to a campaign, and settling a campaign. All in only Ethereum.  
+
+Originally I wanted to also be able to refund the campaign, but I ran into two issues:
+1. I could not figure out how to create a dynamically allocated array. I think there are reasons related to blockchain infra for why this is the case, I found some articles on "CRUD" in Solidity which I have yet to check out, but will leave here: https://medium.com/robhitchens/solidity-crud-part-1-824ffa69509a
+2. I didn't realize the limitations on structs meaning I couldn't have a mapping inside of them. I originally wanted a more robust campaign struct, but I was hampered by the fact that mappings can't be held inside of them.
+
+I think the next place I want to go is having the initial contract launch additional contracts for each campaign. This would simplify organization, and I assume also offer lower gas costs for the donators later down the line. Although at this point I am not concerned with gas costs. Moving to creating a contract for each campaign also allows for more customizable campaigns later down the line. Currently I am thinking about ERC20 support, and different campaign styles similar to the "flexible funding" campaign type.
+
+Overall looking forwards to expanding on this simple design.
