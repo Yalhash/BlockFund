@@ -10,12 +10,6 @@ pragma solidity >=0.8.2 <0.9.0;
 
  */
 contract CryptoCampaign {
-
-    // struct Contribution {  
-    //     address payable contributor;
-    //     uint256 amount;
-    // }
-
     struct Campaign {
         // address payable owner;
         uint256 goal;
