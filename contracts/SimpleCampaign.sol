@@ -39,8 +39,8 @@ contract SimpleCampaign {
 
     function settleCampaign() public {
         require(msg.sender == owner, "Only the owner of a campaign can settle it");
-        require(collected >= goal, "The campaign has not been reached yet.");
-        require(!active, "Campaign is already completed!");
+        require(collected >= goal, "The campaign goal has not been reached yet.");
+        require(active, "Campaign is already completed!");
         active = false;
         owner.transfer(collected);
     }
