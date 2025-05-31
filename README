@@ -1,0 +1,14 @@
+This is the Second version of the Crypto Campaign.
+
+It has the capability of creating a campaign as a separate contract, donating to said campaign, settling campaign, aborting and refunding the campaign. All in only Ethereum.
+
+Refunding is done a little differently now, essentially the user has to reach out themselves to get the refund. This feels more DeFi to me, although is a little inconvenient for the users. It does fix the issue of the user having a contract which caueses an error. Previous iterations would ignore the error and continue on, but that user would lose everything forever since the campaign was considered settled. This way it is their responsibility altogether.
+
+There are a couple of directions I could take the next steps:
+1. Introduce a web interface
+2. Expand the contract to accept various ERC-20 tokens as inputs. This would likely include some oracle work I believe. I have no clue how that works. This will be very difficult but I think will be incredibly instructive for me to learn more about decentralized topics.
+
+I think I want to introduce the web interface first. It is an area I am weak in as a developer, I find the whole hosting business a headache. For now I will do local hosting, but I need to figure out how to also do a local blockchain hosting... Hopefully I can also continue using the remix interface with this. I also need to figure out how to do web3 integration. So there are two major areas I can learn from. In general it will also provide a nice workspace to motivate further improvements.
+
+Excited to buckle down and figure out this next stage
+
