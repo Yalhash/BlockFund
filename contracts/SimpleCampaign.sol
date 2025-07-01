@@ -29,23 +29,31 @@ contract SimpleCampaign {
         collected = 0;
     }
 
-    function donate() public payable {
-        require(active, "Campaign is no longer accepting donations");
+    modifier onlyOwner() {
+        require(msg.sender == owner, "This function is only accessible by the owner");
+        _;
+    }
+
+    modifier onlyActiveCampaign() {
+        require (active, "This function can only be accessed while a campaign is active");
+        _;
+    }
+
+    function donate() public payable onlyActiveCampaign {
         require(msg.value > 0, "Must include a donation");
         collected += msg.value;
         refund_mapping[msg.sender] += msg.value;
         emit DonationRecieved(msg.sender, msg.value);
     }
 
-    function settleCampaign() public {
-        require(msg.sender == owner, "Only the owner of a campaign can settle it");
+    function settleCampaign() public onlyOwner onlyActiveCampaign {
         require(collected >= goal, "The campaign goal has not been reached yet.");
-        require(active, "Campaign is already completed!");
         active = false;
         owner.transfer(collected);
     }
 
     function withdrawDonation(address payable refund_address, uint256 refund_wei) public {
+        require(!active, "The campaign must be aborted to allow refunds");
         require(refund_mapping[msg.sender] >= refund_wei, "Message sender has donated less than the requested wei");
         collected -= refund_wei;
         refund_mapping[msg.sender] -= refund_wei;
@@ -54,8 +62,7 @@ contract SimpleCampaign {
     }
 
     // Abort the campaign early, donators can still withdraw their donations
-    function abortCampaign() public {
-        require(msg.sender == owner, "Only the owner of a campaign can abort it");
+    function abortCampaign() public onlyOwner {
         active = false;
     }
 }
