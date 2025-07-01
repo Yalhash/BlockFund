@@ -1,9 +1,9 @@
 After the second version of the campaign I had wanted to enter into the web interface, but I changed my mind since learning more about how to work with on chain concepts has been more interesting to me.
 
-This time was a simple update to introduce a token based campaign. For now it is only a single token, but I beleive the next steps would be to have a multi-token campaign which will be able to compare prices with something like the uniswap TWAP oracle.
+  This time, it was a simple update to introduce a token-based campaign. For now, it involves only a single token, but I believe the next steps will involve a multi-token campaign that can compare prices using something like the Uniswap TWAP oracle.
 
-Working with ERC20 tokens I was hoping to find a way that users would be able to simply donate in one transaction, but it appears that this is impossible due to how contracts are set up. Or at least for the base transactions, I could enhance the interface to allow for the permit based transactions which use off-chain signing of a transaction to allow for the donation to take place in one transaction.
+Working with ERC20 tokens, I was hoping to find a way for users to donate in a single transaction, but this appears to be impossible due to how those contracts are set up, which makes sense for security reasons. There is a way to do this, I could enhance the interface to allow for the permit based transactions which use off-chain signing of a transaction to allow for transfers to take place in one transaction.
 
-In implementing this version I had to learn how to properly use a testnet, and interact with real contracts in order to interact with real token contracts.
+In implementing this version, I had to learn how to properly use a testnet, and interact with real token contracts.
 
-Next steps are to expand the token campaign interface and add a mixed ETH/token contract which will need to compare prices of the contracts in order to settle the capaign.
+Next steps are to expand the token campaign interface and add a mixed ETH/token contract, which will need to compare prices of the contracts in order to settle the capaign.
