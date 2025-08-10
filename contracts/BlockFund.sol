@@ -13,6 +13,7 @@ using StateLibrary for IPoolManager;
 // Internal
 import "contracts/SimpleCampaign.sol";
 import "contracts/TokenCampaign.sol";
+import "contracts/MixedCampaign.sol";
 
 
 
@@ -25,6 +26,7 @@ import "contracts/TokenCampaign.sol";
 contract BlockFund {
 
     mapping(Currency => PoolId) token_pools;
+    mapping(Currency => bool) private token_pool_added;
     address public owner;
     IPoolManager public immutable pool_manager;
 
@@ -49,7 +51,9 @@ contract BlockFund {
 
     function addTokenPool(PoolId _pool, Currency _currency) public onlyOwner {
         token_pools[_currency] = _pool;
-        pool_manager.getSlot0(_pool);
+        token_pool_added[_currency] = true;
+        // Double check this is a valid pool, revert on failure
+        pool_manager.getSlot0(_pool); 
     }
 
     function changeOwner(address _new_owner) public onlyOwner {
@@ -68,8 +72,12 @@ contract BlockFund {
         return address(new_campaign);
     }
 
-    function createMixedCampaign(address campaign_owner, IERC20 token, uint256 campaign_goal) public returns (address) {
-        TokenCampaign new_campaign = new TokenCampaign(campaign_owner, token, campaign_goal);
+    // A campaign which allows donations of ERC20 tokens and Ethereum
+    function createMixedCampaign(address payable campaign_owner, address token, uint256 campaign_goal_wei) public returns (address) {
+        Currency uni_currency = Currency.wrap(token);
+        require(token_pool_added[uni_currency], "Token is not supported!");
+
+        MixedCampaign new_campaign = new MixedCampaign(campaign_owner, pool_manager, token_pools[uni_currency], token, campaign_goal_wei);
         emit createdCampaign(address(new_campaign), CampaignType.TOKEN);
         return address(new_campaign);
     }
