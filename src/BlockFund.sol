@@ -3,24 +3,23 @@
 pragma solidity >=0.8.2 <0.9.0;
 // External
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IPoolManager} from "@uniswap/v4-core/interfaces/IPoolManager.sol";
-import {PoolId} from "@uniswap/v4-core/types/PoolId.sol";
-import {StateLibrary} from "@uniswap/v4-core/libraries/StateLibrary.sol";
-import {Currency, CurrencyLibrary} from "@uniswap/v4-core/types/Currency.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 using StateLibrary for IPoolManager;
 
 
 // Internal
-import "contracts/SimpleCampaign.sol";
-import "contracts/TokenCampaign.sol";
-import "contracts/MixedCampaign.sol";
+import "./SimpleCampaign.sol";
+import "./TokenCampaign.sol";
+import "./MixedCampaign.sol";
 
 
 
 /**
  * @title Block Fund
  * @dev Has the ability to create campaigns which accepts donations
- * @custom:dev-run-script ./scripts/deploy_with_ethers.ts
 
  */
 contract BlockFund {
