@@ -1,83 +1,76 @@
 // SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.20;
 
-pragma solidity >=0.8.2 <0.9.0;
-// External
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
-import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
-using StateLibrary for IPoolManager;
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
-
-// Internal
-import "./SimpleCampaign.sol";
-import "./TokenCampaign.sol";
-import "./MixedCampaign.sol";
-
-
+import {SimpleCampaign} from "./SimpleCampaign.sol";
+import {TokenCampaign} from "./TokenCampaign.sol";
+import {MixedCampaign} from "./MixedCampaign.sol";
+import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
 
 /**
  * @title Block Fund
- * @dev Has the ability to create campaigns which accepts donations
-
+ * @notice Factory that deploys one contract per campaign. Anyone can create a campaign.
+ * @dev Mixed campaigns are limited to tokens the price oracle supports. Each mixed campaign
+ *      keeps the oracle it was created with; `setOracle` only affects new campaigns.
  */
-contract BlockFund {
-
-    mapping(Currency => PoolId) token_pools;
-    mapping(Currency => bool) private token_pool_added;
-    address public owner;
-    IPoolManager public immutable pool_manager;
-
-
+contract BlockFund is Ownable {
     enum CampaignType {
         SIMPLE,
-        TOKEN
+        TOKEN,
+        MIXED
     }
 
-    event createdCampaign(address, CampaignType);
+    IPriceOracle public oracle;
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "This function is only accessible by the owner");
-        _;
+    event CampaignCreated(address indexed campaign, CampaignType indexed campaignType, address indexed campaignOwner);
+    event OracleChanged(address oracle);
+
+    error ZeroAddress();
+    error UnsupportedToken(address token);
+
+    constructor(address initialOwner, IPriceOracle oracle_) Ownable(initialOwner) {
+        _setOracle(oracle_);
     }
 
-    constructor(address _owner, IPoolManager _pool_manager) {
-        pool_manager = _pool_manager;
-        owner = _owner;
+    function setOracle(IPriceOracle oracle_) external onlyOwner {
+        _setOracle(oracle_);
     }
 
-
-    function addTokenPool(PoolId _pool, Currency _currency) public onlyOwner {
-        token_pools[_currency] = _pool;
-        token_pool_added[_currency] = true;
-        // Double check this is a valid pool, revert on failure
-        pool_manager.getSlot0(_pool); 
+    /// @param deadline Unix timestamp; must be in the future and within MAX_DURATION.
+    function createSimpleCampaign(address payable campaignOwner, uint256 goalWei, uint256 deadline)
+        external
+        returns (address)
+    {
+        SimpleCampaign campaign = new SimpleCampaign(campaignOwner, goalWei, deadline);
+        emit CampaignCreated(address(campaign), CampaignType.SIMPLE, campaignOwner);
+        return address(campaign);
     }
 
-    function changeOwner(address _new_owner) public onlyOwner {
-        owner = _new_owner;
-    }
-    
-    function createSimpleCampaign(address payable campaign_owner, uint256 campaign_goal_wei) public returns (address) {
-        SimpleCampaign new_campaign = new SimpleCampaign(campaign_owner, campaign_goal_wei);
-        emit createdCampaign(address(new_campaign), CampaignType.SIMPLE);
-        return address(new_campaign);
-    }
-
-    function createTokenCampaign(address campaign_owner, IERC20 token, uint256 campaign_goal) public returns (address) {
-        TokenCampaign new_campaign = new TokenCampaign(campaign_owner, token, campaign_goal);
-        emit createdCampaign(address(new_campaign), CampaignType.TOKEN);
-        return address(new_campaign);
+    function createTokenCampaign(address payable campaignOwner, IERC20 token, uint256 goal, uint256 deadline)
+        external
+        returns (address)
+    {
+        TokenCampaign campaign = new TokenCampaign(campaignOwner, token, goal, deadline);
+        emit CampaignCreated(address(campaign), CampaignType.TOKEN, campaignOwner);
+        return address(campaign);
     }
 
-    // A campaign which allows donations of ERC20 tokens and Ethereum
-    function createMixedCampaign(address payable campaign_owner, address token, uint256 campaign_goal_wei) public returns (address) {
-        Currency uni_currency = Currency.wrap(token);
-        require(token_pool_added[uni_currency], "Token is not supported!");
+    /// @notice A campaign that accepts ETH and `token`, with the goal in wei.
+    function createMixedCampaign(address payable campaignOwner, IERC20 token, uint256 goalWei, uint256 deadline)
+        external
+        returns (address)
+    {
+        if (!oracle.isSupported(address(token))) revert UnsupportedToken(address(token));
+        MixedCampaign campaign = new MixedCampaign(campaignOwner, token, oracle, goalWei, deadline);
+        emit CampaignCreated(address(campaign), CampaignType.MIXED, campaignOwner);
+        return address(campaign);
+    }
 
-        MixedCampaign new_campaign = new MixedCampaign(campaign_owner, pool_manager, token_pools[uni_currency], token, campaign_goal_wei);
-        emit createdCampaign(address(new_campaign), CampaignType.TOKEN);
-        return address(new_campaign);
+    function _setOracle(IPriceOracle oracle_) internal {
+        if (address(oracle_) == address(0)) revert ZeroAddress();
+        oracle = oracle_;
+        emit OracleChanged(address(oracle_));
     }
 }

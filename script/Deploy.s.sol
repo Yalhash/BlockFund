@@ -2,26 +2,31 @@
 pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {BlockFund} from "../src/BlockFund.sol";
+import {ChainlinkTwapOracle} from "../src/oracles/ChainlinkTwapOracle.sol";
+import {IPriceOracle} from "../src/interfaces/IPriceOracle.sol";
 
-/// @notice Deploys the BlockFund factory.
+/// @notice Deploys the price oracle and the BlockFund factory.
 /// Env vars:
-///   OWNER        - address that will own the factory
-///   POOL_MANAGER - Uniswap v4 PoolManager on the target chain (any address works
-///                  locally if you only use Simple/Token campaigns)
+///   OWNER - owner of both contracts (configures price sources, can swap the oracle)
+///   WETH  - wrapped ETH on the target chain
+///
+/// Price sources are added afterwards by OWNER (see README), e.g.
+///   cast send $ORACLE "setChainlinkFeed(address,address,uint32,bool)" <token> <feed> 90000 false
 ///
 /// Example:
-///   forge script script/Deploy.s.sol --rpc-url $SEPOLIA_RPC_URL --account <keystore-name> --broadcast
+///   forge script script/Deploy.s.sol --rpc-url $SEPOLIA_RPC_URL --account deployer --broadcast
 contract Deploy is Script {
-    function run() external returns (BlockFund fund) {
+    function run() external returns (ChainlinkTwapOracle oracle, BlockFund fund) {
         address owner = vm.envAddress("OWNER");
-        address poolManager = vm.envAddress("POOL_MANAGER");
+        address weth = vm.envAddress("WETH");
 
         vm.startBroadcast();
-        fund = new BlockFund(owner, IPoolManager(poolManager));
+        oracle = new ChainlinkTwapOracle(owner, weth);
+        fund = new BlockFund(owner, IPriceOracle(address(oracle)));
         vm.stopBroadcast();
 
-        console.log("BlockFund deployed at", address(fund));
+        console.log("ChainlinkTwapOracle:", address(oracle));
+        console.log("BlockFund:          ", address(fund));
     }
 }
