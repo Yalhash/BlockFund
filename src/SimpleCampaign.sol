@@ -9,7 +9,6 @@ pragma solidity >=0.8.2 <0.9.0;
  *      a global refund button which could be pressed by the creator is an option,
  *      but this could increase gas costs. Instead I prefer aborting the campaign 
  *      and allowing the users to withdraw their donations, which they can do at any time anyways 
- * @custom:dev-run-script ./scripts/deploy_with_ethers.ts
 
  */
 contract SimpleCampaign {

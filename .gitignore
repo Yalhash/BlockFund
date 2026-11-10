@@ -1,2 +1,13 @@
-*.json
-.deps
+# Foundry build output
+out/
+cache/
+
+# Local deployment logs (keep testnet/mainnet ones if you want them tracked)
+broadcast/*/31337/
+broadcast/**/dry-run/
+
+# Secrets
+.env
+
+# Remix IDE files
+.deps/

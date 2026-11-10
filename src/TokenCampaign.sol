@@ -7,7 +7,6 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /**
  * @title Token Campaign
  * @dev A simple campaign which accepts donations of an ERC20 token.
- * @custom:dev-run-script ./scripts/deploy_with_ethers.ts
  */
 
 
