@@ -17,6 +17,11 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
  *  - The first settle or refund decides the outcome: the state never changes again,
  *    so a later price swing can't flip a campaign that is already refunding.
  *
+ * Payouts are pulled, not pushed: settling only records the outcome, then the owner calls
+ * `claimFunds(to)`. Refunds work the same way with `withdrawDonation(to)`. Both send to an
+ * address the caller chooses, so a recipient that can't accept ETH (e.g. a contract
+ * without `receive`) or a blacklisted token holder can't block the campaign.
+ *
  * Children define what counts toward the goal (`totalRaised`) and how assets move.
  */
 abstract contract CampaignBase is ReentrancyGuard {
@@ -39,7 +44,8 @@ abstract contract CampaignBase is ReentrancyGuard {
     State public state;
 
     event DonationReceived(address indexed donor, address indexed asset, uint256 amount);
-    event DonationRefunded(address indexed donor, address indexed asset, uint256 amount);
+    event DonationRefunded(address indexed donor, address indexed asset, uint256 amount, address to);
+    event FundsClaimed(address indexed to, address indexed asset, uint256 amount);
     event CampaignSettled(address indexed caller);
     event RefundsOpened(address indexed caller);
 
@@ -54,6 +60,8 @@ abstract contract CampaignBase is ReentrancyGuard {
     error OnlyOwnerBeforeDeadline();
     error RefundsNotOpen();
     error NothingToRefund();
+    error NotSettled();
+    error NothingToClaim();
     error EthTransferFailed();
 
     constructor(address payable owner_, uint256 goal_, uint256 deadline_) {
@@ -82,7 +90,8 @@ abstract contract CampaignBase is ReentrancyGuard {
         return totalRaised() >= goal;
     }
 
-    /// @notice Pays out to the owner. Owner-only before the deadline, anyone after it.
+    /// @notice Marks a successful campaign as settled; the funds then belong to the owner,
+    ///         who collects them with `claimFunds`. Owner-only before the deadline, anyone after.
     function settleCampaign() external nonReentrant {
         if (state != State.Active) revert NotActive();
         if (block.timestamp < deadline && msg.sender != owner) revert OnlyOwnerBeforeDeadline();
@@ -90,7 +99,13 @@ abstract contract CampaignBase is ReentrancyGuard {
 
         state = State.Settled;
         emit CampaignSettled(msg.sender);
-        _payOwner();
+    }
+
+    /// @notice Sends all raised funds to `to`, which can be any address the owner chooses.
+    function claimFunds(address payable to) external onlyOwner nonReentrant {
+        if (state != State.Settled) revert NotSettled();
+        if (to == address(0)) revert ZeroAddress();
+        _payOut(to);
     }
 
     /// @notice Cancels the campaign and opens refunds.
@@ -100,9 +115,11 @@ abstract contract CampaignBase is ReentrancyGuard {
         emit RefundsOpened(msg.sender);
     }
 
-    /// @notice Returns all of the caller's donations. Available after an abort, or once the
-    ///         deadline has passed without the goal being reached.
-    function withdrawDonation() external nonReentrant {
+    /// @notice Sends all of the caller's donations to `to` (usually the caller's own address).
+    ///         Available after an abort, or once the deadline has passed without the goal
+    ///         being reached.
+    function withdrawDonation(address payable to) external nonReentrant {
+        if (to == address(0)) revert ZeroAddress();
         if (state == State.Active) {
             if (block.timestamp < deadline || _goalReachedForRefunds()) revert RefundsNotOpen();
             state = State.Refunding;
@@ -110,7 +127,7 @@ abstract contract CampaignBase is ReentrancyGuard {
         } else if (state != State.Refunding) {
             revert RefundsNotOpen();
         }
-        _refund(payable(msg.sender));
+        _refund(msg.sender, to);
     }
 
     // ---------------------------------------------------------------------
@@ -123,12 +140,13 @@ abstract contract CampaignBase is ReentrancyGuard {
         return goalReached();
     }
 
-    /// @dev Send all raised funds to `owner`. State is already Settled.
-    function _payOwner() internal virtual;
+    /// @dev Send all unclaimed raised funds to `to`, zeroing balances before transferring.
+    ///      Must revert with NothingToClaim if there is nothing left. State is Settled.
+    function _payOut(address payable to) internal virtual;
 
-    /// @dev Return all of `donor`'s donations, zeroing balances before transferring.
+    /// @dev Send all of `donor`'s donations to `to`, zeroing balances before transferring.
     ///      Must revert with NothingToRefund if there is nothing to return.
-    function _refund(address payable donor) internal virtual;
+    function _refund(address donor, address payable to) internal virtual;
 
     // ---------------------------------------------------------------------
     // Asset helpers

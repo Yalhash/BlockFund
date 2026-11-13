@@ -13,6 +13,27 @@ import {IPriceOracle} from "../src/interfaces/IPriceOracle.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockPriceOracle} from "./mocks/MockOracles.sol";
 
+/// @dev Stand-in for a multisig such as a Safe: a contract that executes calls once its
+///      signers have approved them (here simplified to a single controller).
+contract MockMultisig {
+    address immutable controller;
+
+    constructor() {
+        controller = msg.sender;
+    }
+
+    function execute(address target, bytes calldata data) external returns (bytes memory) {
+        require(msg.sender == controller, "not approved");
+        (bool ok, bytes memory ret) = target.call(data);
+        if (!ok) {
+            assembly {
+                revert(add(ret, 32), mload(ret))
+            }
+        }
+        return ret;
+    }
+}
+
 contract BlockFundTest is Test {
     BlockFund fund;
     MockPriceOracle oracle;
@@ -98,6 +119,42 @@ contract BlockFundTest is Test {
         address afterChange = fund.createMixedCampaign(campaignOwner, IERC20(address(token)), 1 ether, deadline);
         assertEq(address(MixedCampaign(before).oracle()), address(oracle));
         assertEq(address(MixedCampaign(afterChange).oracle()), address(newOracle));
+    }
+
+    // ----- Admin by a multisig, with two-step ownership transfer -----
+
+    function test_TwoStepTransfer_ToMultisig() public {
+        MockMultisig multisig = new MockMultisig();
+
+        vm.prank(fundOwner);
+        fund.transferOwnership(address(multisig));
+        assertEq(fund.owner(), fundOwner, "unchanged until accepted");
+        assertEq(fund.pendingOwner(), address(multisig));
+
+        multisig.execute(address(fund), abi.encodeCall(fund.acceptOwnership, ()));
+        assertEq(fund.owner(), address(multisig));
+
+        // The multisig can now administer the factory; the old owner can't.
+        MockPriceOracle newOracle = new MockPriceOracle();
+        multisig.execute(address(fund), abi.encodeCall(fund.setOracle, (IPriceOracle(address(newOracle)))));
+        assertEq(address(fund.oracle()), address(newOracle));
+
+        vm.prank(fundOwner);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, fundOwner));
+        fund.setOracle(IPriceOracle(address(oracle)));
+    }
+
+    function test_RevertWhen_WrongAddressAcceptsOwnership() public {
+        address intended = makeAddr("intended");
+        address stranger = makeAddr("stranger");
+
+        vm.prank(fundOwner);
+        fund.transferOwnership(intended);
+
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, stranger));
+        fund.acceptOwnership();
+        assertEq(fund.owner(), fundOwner);
     }
 
     function test_RevertWhen_NonOwnerSetsOracle() public {

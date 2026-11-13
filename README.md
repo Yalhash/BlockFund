@@ -8,9 +8,11 @@ A crypto crowdfunding platform. A `BlockFund` factory contract deploys one contr
 
 1. Someone creates a campaign through `BlockFund` with an owner, a goal and a deadline (at most 365 days away).
 2. Donors give until the deadline. Token donations need `token.approve(campaign, amount)` first.
-3. **Goal reached:** the owner can call `settleCampaign()` at any time. After the deadline, *anyone* can, so funds never sit idle.
-4. **Goal missed by the deadline, or the owner calls `abortCampaign()`:** refunds open. Each donor calls `withdrawDonation()` and gets back exactly what they gave, in the asset they gave.
+3. **Goal reached:** the owner can call `settleCampaign()` at any time. After the deadline, *anyone* can, so funds never sit idle. Settling only records the outcome; the owner then calls `claimFunds(to)` to collect everything at an address of their choice.
+4. **Goal missed by the deadline, or the owner calls `abortCampaign()`:** refunds open. Each donor calls `withdrawDonation(to)` and gets back exactly what they gave, in the asset they gave, at an address of their choice (normally their own).
 5. The first settle or refund fixes the outcome (`state` becomes `Settled` or `Refunding`) and it never changes after that.
+
+Payouts and refunds are *pulled* by the recipient rather than pushed. A recipient that can't receive the funds (a contract without a `receive()` function, or an address a token like USDC has blacklisted) can't block the campaign: it just withdraws to a different address.
 
 ## Contracts
 
@@ -34,7 +36,9 @@ Token donations are valued with sources that a flash loan can't move:
 
 Each source is checked when the oracle owner adds it. A feed must return a fresh positive answer, and a pool must pair the token with WETH and have enough history for the window.
 
-**Trust assumption:** the oracle owner can change price sources, including for running campaigns. Use a multisig or timelock as owner before any real deployment.
+**Trust assumption:** the oracle owner can change price sources, including for running campaigns. That's why the owner of both the oracle and the factory is a multisig (see [Admin](#admin-multisig)).
+
+Campaign owners are a single address for now (any wallet or contract). Multisig-owned campaigns already work if the owner address is a Safe; dedicated support in the front-end is planned.
 
 ## Setup
 
@@ -81,7 +85,9 @@ CI runs `forge build` and `forge test` on every push (`.github/workflows/test.ym
 
 Copy `.env.example` to `.env`, fill it in, then `source .env`.
 
-Local chain (Simple and Token campaigns; WETH can be any address):
+### Local chain
+
+On anvil (chain id 31337) the owner can be a plain wallet. WETH can be any address unless you use mixed campaigns.
 
 ```sh
 anvil                         # in another terminal
@@ -90,26 +96,46 @@ forge script script/Deploy.s.sol --rpc-url http://127.0.0.1:8545 \
   --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 --broadcast
 ```
 
-(That's anvil's first default account.) For mixed campaigns locally, run `anvil --fork-url $MAINNET_RPC_URL` and use the real WETH, feeds and pools.
+(That's anvil's first default account; it can then configure the oracle directly with `cast send`.) For mixed campaigns locally, run `anvil --fork-url $MAINNET_RPC_URL` and use the real WETH, feeds and pools.
 
-Testnet: import your key once with `cast wallet import deployer --interactive`, then:
+### Testnet / mainnet
 
-```sh
-forge script script/Deploy.s.sol --rpc-url $SEPOLIA_RPC_URL --account deployer --broadcast
-```
+1. Create the admin Safe first (see below) and put its address in `OWNER`. The deploy script refuses to run if `OWNER` has no contract code on the target chain.
+2. Import a deployer key once with `cast wallet import deployer --interactive`. It only pays gas and has no admin rights afterwards.
+3. Deploy:
 
-Then, as `OWNER`, add price sources to the oracle:
+   ```sh
+   forge script script/Deploy.s.sol --rpc-url $SEPOLIA_RPC_URL --account deployer --broadcast
+   ```
 
-```sh
-# ETH/USD feed (needed for any USD-denominated token feed)
-cast send $ORACLE "setEthUsdFeed(address,uint32)" <ethUsdFeed> 7200 --account deployer --rpc-url $SEPOLIA_RPC_URL
-# Token feed: heartbeat in seconds, true if the feed is TOKEN/USD
-cast send $ORACLE "setChainlinkFeed(address,address,uint32,bool)" <token> <feed> 90000 true --account deployer --rpc-url $SEPOLIA_RPC_URL
-# Optional TWAP fallback: a Uniswap v3 token/WETH pool, window >= 1800 seconds
-cast send $ORACLE "setTwapPool(address,address,uint32)" <token> <v3Pool> 1800 --account deployer --rpc-url $SEPOLIA_RPC_URL
-```
+## Admin (multisig)
+
+The oracle and the factory are owned by a [Safe](https://app.safe.global) multisig, so admin actions need several approvals and no single leaked key can change price sources.
+
+### Create the Safe
+
+1. Open https://app.safe.global, connect MetaMask, and pick the network.
+2. Add the signer addresses (e.g. three MetaMask accounts, ideally on different devices or with different people) and a threshold (e.g. 2 of 3).
+3. Confirm the deployment transaction. The Safe's address is your `OWNER`.
+
+On a testnet you can hold all the signer keys yourself as separate MetaMask accounts.
+
+### Configure price sources
+
+Admin calls go through the Safe's **Transaction Builder** (Apps, then Transaction Builder):
+
+1. Enter the oracle's address. Paste its ABI from `out/ChainlinkTwapOracle.sol/ChainlinkTwapOracle.json` (the `abi` field) if it isn't verified on the block explorer.
+2. Add a call per change and put them all in one batch:
+   - `setEthUsdFeed(feed, heartbeat)` first, if any token uses a USD feed
+   - `setChainlinkFeed(token, feed, heartbeat, usdDenominated)`
+   - optionally `setTwapPool(token, v3Pool, window)` with a window of at least 1800 seconds
+3. Create the batch. The other signers approve it in the Safe app, and the last one executes it.
 
 Chainlink feed addresses and heartbeats are listed at https://docs.chain.link/data-feeds/price-feeds/addresses. Set each heartbeat slightly above the feed's published one.
+
+### Changing the admin
+
+Ownership transfers are two-step. The current owner calls `transferOwnership(newOwner)`; nothing changes until `newOwner` calls `acceptOwnership()`. A typo'd address therefore can't take over (or lock) admin rights. To move to a new Safe, run both steps as Safe transactions.
 
 ## Version history
 

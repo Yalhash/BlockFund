@@ -5,7 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {CampaignBase} from "../src/CampaignBase.sol";
 import {TokenCampaign} from "../src/TokenCampaign.sol";
-import {MockERC20, MockFeeToken, MockNoReturnToken} from "./mocks/MockERC20.sol";
+import {MockERC20, MockFeeToken, MockNoReturnToken, MockBlacklistToken} from "./mocks/MockERC20.sol";
 
 contract TokenCampaignTest is Test {
     TokenCampaign campaign;
@@ -44,12 +44,39 @@ contract TokenCampaignTest is Test {
         campaign.donate(1e18);
     }
 
-    function test_Settle_PaysOwnerOnceGoalReached() public {
+    function test_SettleThenClaim_PaysOwner() public {
         _donate(GOAL);
-        vm.prank(owner);
+        vm.startPrank(owner);
         campaign.settleCampaign();
+        assertEq(token.balanceOf(owner), 0, "settling alone moves nothing");
+        campaign.claimFunds(owner);
+        vm.stopPrank();
+
         assertEq(token.balanceOf(owner), GOAL);
         assertEq(token.balanceOf(address(campaign)), 0);
+    }
+
+    /// @dev USDC/USDT can blacklist addresses. A blacklisted owner claims to another address.
+    function test_BlacklistedOwner_CanClaimElsewhere() public {
+        MockBlacklistToken usdcLike = new MockBlacklistToken();
+        TokenCampaign c = new TokenCampaign(owner, IERC20(address(usdcLike)), 100e6, deadline);
+        usdcLike.mint(alice, 100e6);
+        vm.startPrank(alice);
+        usdcLike.approve(address(c), 100e6);
+        c.donate(100e6);
+        vm.stopPrank();
+
+        usdcLike.setBlacklisted(owner, true);
+        address payable treasury = payable(makeAddr("treasury"));
+
+        vm.startPrank(owner);
+        c.settleCampaign();
+        vm.expectRevert(bytes("blacklisted"));
+        c.claimFunds(owner);
+        c.claimFunds(treasury);
+        vm.stopPrank();
+
+        assertEq(usdcLike.balanceOf(treasury), 100e6);
     }
 
     function test_RevertWhen_SettlingBeforeGoal() public {
@@ -65,7 +92,7 @@ contract TokenCampaignTest is Test {
         vm.warp(deadline);
 
         vm.prank(alice);
-        campaign.withdrawDonation();
+        campaign.withdrawDonation(payable(alice));
 
         assertEq(token.balanceOf(alice), START);
         assertEq(token.balanceOf(address(campaign)), 0);
@@ -89,7 +116,7 @@ contract TokenCampaignTest is Test {
         vm.prank(owner);
         feeCampaign.abortCampaign();
         vm.prank(alice);
-        feeCampaign.withdrawDonation();
+        feeCampaign.withdrawDonation(payable(alice));
         assertEq(feeToken.balanceOf(address(feeCampaign)), 0);
     }
 
@@ -103,8 +130,10 @@ contract TokenCampaignTest is Test {
         usdtCampaign.donate(100e6);
         vm.stopPrank();
 
-        vm.prank(owner);
+        vm.startPrank(owner);
         usdtCampaign.settleCampaign();
+        usdtCampaign.claimFunds(owner);
+        vm.stopPrank();
         assertEq(usdtLike.balanceOf(owner), 100e6);
     }
 }

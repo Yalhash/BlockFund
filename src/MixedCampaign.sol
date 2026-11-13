@@ -63,17 +63,25 @@ contract MixedCampaign is CampaignBase {
         }
     }
 
-    function _payOwner() internal override {
+    function _payOut(address payable to) internal override {
         uint256 tokenAmount = tokenCollected;
         uint256 ethAmount = ethCollected;
+        if (tokenAmount == 0 && ethAmount == 0) revert NothingToClaim();
+
         tokenCollected = 0;
         ethCollected = 0;
 
-        if (tokenAmount > 0) _sendToken(token, owner, tokenAmount);
-        if (ethAmount > 0) _sendEth(owner, ethAmount);
+        if (tokenAmount > 0) {
+            emit FundsClaimed(to, address(token), tokenAmount);
+            _sendToken(token, to, tokenAmount);
+        }
+        if (ethAmount > 0) {
+            emit FundsClaimed(to, ETH, ethAmount);
+            _sendEth(to, ethAmount);
+        }
     }
 
-    function _refund(address payable donor) internal override {
+    function _refund(address donor, address payable to) internal override {
         uint256 ethAmount = ethDonations[donor];
         uint256 tokenAmount = tokenDonations[donor];
         if (ethAmount == 0 && tokenAmount == 0) revert NothingToRefund();
@@ -85,12 +93,12 @@ contract MixedCampaign is CampaignBase {
         tokenCollected -= tokenAmount;
 
         if (tokenAmount > 0) {
-            emit DonationRefunded(donor, address(token), tokenAmount);
-            _sendToken(token, donor, tokenAmount);
+            emit DonationRefunded(donor, address(token), tokenAmount, to);
+            _sendToken(token, to, tokenAmount);
         }
         if (ethAmount > 0) {
-            emit DonationRefunded(donor, ETH, ethAmount);
-            _sendEth(donor, ethAmount);
+            emit DonationRefunded(donor, ETH, ethAmount, to);
+            _sendEth(to, ethAmount);
         }
     }
 }

@@ -33,19 +33,22 @@ contract TokenCampaign is CampaignBase {
         return collected;
     }
 
-    function _payOwner() internal override {
+    function _payOut(address payable to) internal override {
         uint256 amount = collected;
+        if (amount == 0) revert NothingToClaim();
+
         collected = 0;
-        _sendToken(token, owner, amount);
+        emit FundsClaimed(to, address(token), amount);
+        _sendToken(token, to, amount);
     }
 
-    function _refund(address payable donor) internal override {
+    function _refund(address donor, address payable to) internal override {
         uint256 amount = donations[donor];
         if (amount == 0) revert NothingToRefund();
 
         donations[donor] = 0;
         collected -= amount;
-        emit DonationRefunded(donor, address(token), amount);
-        _sendToken(token, donor, amount);
+        emit DonationRefunded(donor, address(token), amount, to);
+        _sendToken(token, to, amount);
     }
 }

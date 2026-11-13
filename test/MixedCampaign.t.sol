@@ -61,9 +61,9 @@ contract MixedCampaignTest is Test {
         campaign.abortCampaign();
 
         vm.prank(ethDonor);
-        campaign.withdrawDonation();
+        campaign.withdrawDonation(payable(ethDonor));
         vm.prank(tokenDonor);
-        campaign.withdrawDonation();
+        campaign.withdrawDonation(payable(tokenDonor));
 
         assertEq(ethDonor.balance, 100 ether, "ETH donor got their ETH back");
         assertEq(token.balanceOf(ethDonor), 0, "ETH donor got no tokens");
@@ -85,7 +85,7 @@ contract MixedCampaignTest is Test {
         vm.prank(owner);
         campaign.abortCampaign();
         vm.prank(both);
-        campaign.withdrawDonation();
+        campaign.withdrawDonation(payable(both));
 
         assertEq(both.balance, ethAmount);
         assertEq(token.balanceOf(both), tokenAmount);
@@ -101,15 +101,53 @@ contract MixedCampaignTest is Test {
         assertEq(campaign.totalRaised(), 5 ether);
     }
 
-    function test_Settle_PaysOwnerBothAssets() public {
+    function test_SettleThenClaim_PaysOwnerBothAssets() public {
         _donateEth(ethDonor, 4 ether);
         _donateToken(tokenDonor, 600e18); // 6 ETH worth
 
-        vm.prank(owner);
+        vm.startPrank(owner);
         campaign.settleCampaign();
+        campaign.claimFunds(owner);
+        vm.stopPrank();
 
         assertEq(owner.balance, 4 ether);
         assertEq(token.balanceOf(owner), 600e18);
+        assertEq(campaign.ethCollected(), 0);
+        assertEq(campaign.tokenCollected(), 0);
+    }
+
+    function test_Claim_BothAssetsToAnotherAddress() public {
+        _donateEth(ethDonor, 4 ether);
+        _donateToken(tokenDonor, 600e18);
+        address payable treasury = payable(makeAddr("treasury"));
+
+        vm.startPrank(owner);
+        campaign.settleCampaign();
+        campaign.claimFunds(treasury);
+        vm.stopPrank();
+
+        assertEq(treasury.balance, 4 ether);
+        assertEq(token.balanceOf(treasury), 600e18);
+        assertEq(owner.balance, 0);
+    }
+
+    function test_Refund_BothAssetsToAnotherAddress() public {
+        address both = makeAddr("both");
+        address payable newWallet = payable(makeAddr("newWallet"));
+        vm.deal(both, 1 ether);
+        token.mint(both, 50e18);
+        _donateEth(both, 1 ether);
+        _donateToken(both, 50e18);
+
+        vm.prank(owner);
+        campaign.abortCampaign();
+        vm.prank(both);
+        campaign.withdrawDonation(newWallet);
+
+        assertEq(newWallet.balance, 1 ether);
+        assertEq(token.balanceOf(newWallet), 50e18);
+        assertEq(campaign.ethDonations(both), 0);
+        assertEq(campaign.tokenDonations(both), 0);
     }
 
     function test_RevertWhen_TokenValueBelowGoal() public {
@@ -131,7 +169,7 @@ contract MixedCampaignTest is Test {
         campaign.settleCampaign();
 
         vm.prank(tokenDonor);
-        campaign.withdrawDonation();
+        campaign.withdrawDonation(payable(tokenDonor));
         assertEq(token.balanceOf(tokenDonor), 10_000e18);
     }
 
@@ -143,7 +181,7 @@ contract MixedCampaignTest is Test {
         vm.warp(deadline);
 
         vm.prank(ethDonor);
-        campaign.withdrawDonation();
+        campaign.withdrawDonation(payable(ethDonor));
 
         oracle.setPrice(address(token), 1 ether); // tokens now worth 500 ETH
         vm.prank(owner);
@@ -151,7 +189,7 @@ contract MixedCampaignTest is Test {
         campaign.settleCampaign();
 
         vm.prank(tokenDonor);
-        campaign.withdrawDonation();
+        campaign.withdrawDonation(payable(tokenDonor));
         assertEq(token.balanceOf(tokenDonor), 10_000e18);
     }
 }

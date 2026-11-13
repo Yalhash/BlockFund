@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 import {SimpleCampaign} from "./SimpleCampaign.sol";
 import {TokenCampaign} from "./TokenCampaign.sol";
@@ -14,8 +15,12 @@ import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
  * @notice Factory that deploys one contract per campaign. Anyone can create a campaign.
  * @dev Mixed campaigns are limited to tokens the price oracle supports. Each mixed campaign
  *      keeps the oracle it was created with; `setOracle` only affects new campaigns.
+ *
+ *      Admin: intended to be owned by a multisig (e.g. a Safe). Ownership transfers are
+ *      two-step: `transferOwnership(new)`, then the new owner calls `acceptOwnership()`,
+ *      so a typo'd address can't take over admin rights.
  */
-contract BlockFund is Ownable {
+contract BlockFund is Ownable2Step {
     enum CampaignType {
         SIMPLE,
         TOKEN,

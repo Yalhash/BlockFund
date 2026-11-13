@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -21,9 +22,10 @@ import {IUniswapV3Pool} from "../interfaces/external/IUniswapV3Pool.sol";
  *      wrong pair is rejected up front rather than silently pricing tokens at 0.
  *
  *      Trust: the owner can change price sources, including for campaigns that are
- *      already running. Put the owner behind a multisig/timelock before mainnet.
+ *      already running. It should be a multisig (e.g. a Safe); ownership transfers are
+ *      two-step (`transferOwnership`, then `acceptOwnership` by the new owner).
  */
-contract ChainlinkTwapOracle is IPriceOracle, Ownable {
+contract ChainlinkTwapOracle is IPriceOracle, Ownable2Step {
     struct Feed {
         AggregatorV3Interface feed;
         uint32 heartbeat; // max age (seconds) before an answer counts as stale

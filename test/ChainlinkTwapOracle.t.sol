@@ -210,6 +210,24 @@ contract ChainlinkTwapOracleTest is Test {
         oracle.setTwapPool(address(token), IUniswapV3Pool(address(pool)), WINDOW);
     }
 
+    function test_TwoStepTransfer() public {
+        address multisig = makeAddr("multisig");
+        oracle.transferOwnership(multisig);
+        assertEq(oracle.owner(), address(this));
+
+        vm.prank(multisig);
+        oracle.acceptOwnership();
+        assertEq(oracle.owner(), multisig);
+
+        AggregatorV3Interface feed = _feed(18, 0.0005e18);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(this)));
+        oracle.setChainlinkFeed(address(token), feed, 1 days, false);
+
+        vm.prank(multisig);
+        oracle.setChainlinkFeed(address(token), feed, 1 days, false);
+        assertTrue(oracle.isSupported(address(token)));
+    }
+
     function test_RevertWhen_NonOwnerConfigures() public {
         address stranger = makeAddr("stranger");
         AggregatorV3Interface feed = _feed(18, 0.0005e18);
