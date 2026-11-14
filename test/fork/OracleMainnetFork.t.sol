@@ -49,20 +49,27 @@ contract OracleMainnetForkTest is Test {
         forkActive = true;
     }
 
-    function _chainlinkEthOracle() internal returns (ChainlinkTwapOracle o) {
-        o = new ChainlinkTwapOracle(address(this), WETH);
-        o.setChainlinkFeed(USDC, AggregatorV3Interface(USDC_ETH_FEED), 25 hours, false);
+    function _noFeed() internal pure returns (ChainlinkTwapOracle.ChainlinkParams memory p) {}
+
+    function _noTwap() internal pure returns (ChainlinkTwapOracle.TwapParams memory p) {}
+
+    function _chainlinkEthOracle() internal returns (ChainlinkTwapOracle) {
+        ChainlinkTwapOracle.ChainlinkParams memory p = ChainlinkTwapOracle.ChainlinkParams(
+            AggregatorV3Interface(USDC_ETH_FEED), 25 hours, false, AggregatorV3Interface(address(0)), 0
+        );
+        return new ChainlinkTwapOracle(USDC, WETH, p, _noTwap());
     }
 
-    function _chainlinkUsdOracle() internal returns (ChainlinkTwapOracle o) {
-        o = new ChainlinkTwapOracle(address(this), WETH);
-        o.setEthUsdFeed(AggregatorV3Interface(ETH_USD_FEED), 2 hours);
-        o.setChainlinkFeed(USDC, AggregatorV3Interface(USDC_USD_FEED), 25 hours, true);
+    function _chainlinkUsdOracle() internal returns (ChainlinkTwapOracle) {
+        ChainlinkTwapOracle.ChainlinkParams memory p = ChainlinkTwapOracle.ChainlinkParams(
+            AggregatorV3Interface(USDC_USD_FEED), 25 hours, true, AggregatorV3Interface(ETH_USD_FEED), 2 hours
+        );
+        return new ChainlinkTwapOracle(USDC, WETH, p, _noTwap());
     }
 
-    function _twapOracle() internal returns (ChainlinkTwapOracle o) {
-        o = new ChainlinkTwapOracle(address(this), WETH);
-        o.setTwapPool(USDC, IUniswapV3Pool(USDC_WETH_POOL), 30 minutes);
+    function _twapOracle() internal returns (ChainlinkTwapOracle) {
+        ChainlinkTwapOracle.TwapParams memory t = ChainlinkTwapOracle.TwapParams(IUniswapV3Pool(USDC_WETH_POOL), 30 minutes);
+        return new ChainlinkTwapOracle(USDC, WETH, _noFeed(), t);
     }
 
     /// @dev All three price paths should agree on what 10,000 USDC is worth.

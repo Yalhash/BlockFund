@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity ^0.8.20;
 
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -12,188 +10,170 @@ import {AggregatorV3Interface} from "../interfaces/external/AggregatorV3Interfac
 import {IUniswapV3Pool} from "../interfaces/external/IUniswapV3Pool.sol";
 
 /**
- * @title Chainlink + Uniswap v3 TWAP price oracle
- * @notice Values tokens in wei. Chainlink is the primary source; if a token's feed is
- *         missing, stale, or broken, a Uniswap v3 time-weighted average price (TWAP)
- *         against WETH is used instead.
- * @dev Neither source can be moved by a flash loan: Chainlink is aggregated off-chain,
- *      and a TWAP averages over past blocks (at least MIN_TWAP_WINDOW).
- *      Every source is validated when it's configured, so a typo or a pool for the
- *      wrong pair is rejected up front rather than silently pricing tokens at 0.
+ * @title Chainlink + Uniswap v3 TWAP price oracle for one token
+ * @notice Values `token` in wei. Chainlink is the primary source; if its feed is stale,
+ *         broken, or missing, a Uniswap v3 time-weighted average price (TWAP) against WETH
+ *         is used instead. WETH is always valued 1:1.
+ * @dev Immutable and ownerless: every setting is fixed at deployment and nobody can change
+ *      it afterwards. A campaign that stores this oracle's address therefore keeps exactly
+ *      the price sources it was created with. To use different sources for *new*
+ *      campaigns, deploy a new instance (see PriceSourceRegistry).
  *
- *      Trust: the owner can change price sources, including for campaigns that are
- *      already running. It should be a multisig (e.g. a Safe); ownership transfers are
- *      two-step (`transferOwnership`, then `acceptOwnership` by the new owner).
+ *      Neither source can be moved by a flash loan: Chainlink is aggregated off-chain,
+ *      and a TWAP averages over past blocks (at least MIN_TWAP_WINDOW). Each source is
+ *      validated in the constructor, so a typo or a pool for the wrong pair can't be
+ *      deployed.
+ *
+ *      If a feed is later retired (stops updating), it counts as stale and the TWAP is
+ *      used; if no source works, campaigns can't settle and refunds open after the deadline.
  */
-contract ChainlinkTwapOracle is IPriceOracle, Ownable2Step {
-    struct Feed {
-        AggregatorV3Interface feed;
+contract ChainlinkTwapOracle is IPriceOracle {
+    struct ChainlinkParams {
+        AggregatorV3Interface feed; // zero address = no Chainlink source
         uint32 heartbeat; // max age (seconds) before an answer counts as stale
-        uint8 feedDecimals;
-        bool usdDenominated; // true: TOKEN/USD (converted via ETH/USD). false: TOKEN/ETH
+        bool usdDenominated; // true: TOKEN/USD feed (converted via ethUsdFeed). false: TOKEN/ETH
+        AggregatorV3Interface ethUsdFeed; // required if usdDenominated, ignored otherwise
+        uint32 ethUsdHeartbeat;
     }
 
-    struct Twap {
-        IUniswapV3Pool pool; // a token/WETH pool
-        uint32 window; // averaging window in seconds
+    struct TwapParams {
+        IUniswapV3Pool pool; // a token/WETH pool; zero address = no TWAP source
+        uint32 window; // averaging window in seconds, at least MIN_TWAP_WINDOW
     }
 
     uint32 public constant MIN_TWAP_WINDOW = 30 minutes;
 
-    /// @notice Wrapped ETH. Valued 1:1 with ETH, and the quote asset for all TWAP pools.
+    address public immutable token;
+    /// @notice Wrapped ETH: valued 1:1 with ETH and the quote asset of the TWAP pool.
     address public immutable weth;
+    uint8 public immutable tokenDecimals;
 
-    Feed public ethUsdFeed;
-    mapping(address token => Feed) public chainlinkFeeds;
-    mapping(address token => Twap) public twapPools;
-    mapping(address token => uint8) public tokenDecimals;
+    AggregatorV3Interface public immutable feed;
+    uint32 public immutable heartbeat;
+    uint8 public immutable feedDecimals;
+    bool public immutable usdDenominated;
+    AggregatorV3Interface public immutable ethUsdFeed;
+    uint32 public immutable ethUsdHeartbeat;
+    uint8 public immutable ethUsdDecimals;
 
-    event EthUsdFeedSet(address feed, uint32 heartbeat);
-    event ChainlinkFeedSet(address indexed token, address feed, uint32 heartbeat, bool usdDenominated);
-    event ChainlinkFeedRemoved(address indexed token);
-    event TwapPoolSet(address indexed token, address pool, uint32 window);
-    event TwapPoolRemoved(address indexed token);
+    IUniswapV3Pool public immutable twapPool;
+    uint32 public immutable twapWindow;
 
     error ZeroAddress();
+    error NoPriceSource();
     error InvalidHeartbeat();
     error FeedUnusable(address feed);
     error EthUsdFeedNotSet();
     error TwapWindowTooShort(uint32 window, uint32 minimum);
     error PoolDoesNotPairTokenWithWeth(address pool, address token);
+    error UnsupportedToken(address token);
     error PriceUnavailable(address token);
 
-    constructor(address initialOwner, address weth_) Ownable(initialOwner) {
-        if (weth_ == address(0)) revert ZeroAddress();
+    constructor(address token_, address weth_, ChainlinkParams memory chainlink, TwapParams memory twap) {
+        if (token_ == address(0) || weth_ == address(0)) revert ZeroAddress();
+
+        bool hasFeed = address(chainlink.feed) != address(0);
+        bool hasTwap = address(twap.pool) != address(0);
+        // WETH needs no source (it's 1:1); every other token needs at least one.
+        if (!hasFeed && !hasTwap && token_ != weth_) revert NoPriceSource();
+
+        bool usd = hasFeed && chainlink.usdDenominated;
+        uint8 fDecimals;
+        uint8 eDecimals;
+        uint8 tDecimals;
+        if (hasFeed) {
+            fDecimals = _validateFeed(chainlink.feed, chainlink.heartbeat);
+            tDecimals = IERC20Metadata(token_).decimals();
+            if (usd) {
+                if (address(chainlink.ethUsdFeed) == address(0)) revert EthUsdFeedNotSet();
+                eDecimals = _validateFeed(chainlink.ethUsdFeed, chainlink.ethUsdHeartbeat);
+            }
+        }
+
+        if (hasTwap) {
+            if (twap.window < MIN_TWAP_WINDOW) revert TwapWindowTooShort(twap.window, MIN_TWAP_WINDOW);
+            address token0 = twap.pool.token0();
+            address token1 = twap.pool.token1();
+            bool pairsTokenWithWeth = (token0 == token_ && token1 == weth_) || (token0 == weth_ && token1 == token_);
+            if (!pairsTokenWithWeth) revert PoolDoesNotPairTokenWithWeth(address(twap.pool), token_);
+            // Reverts ("OLD") if the pool doesn't keep enough history for this window yet.
+            _twapTick(twap.pool, twap.window);
+        }
+
+        token = token_;
         weth = weth_;
-    }
+        tokenDecimals = tDecimals;
 
-    // ---------------------------------------------------------------------
-    // Configuration (owner only). Each setter checks the source works now.
-    // ---------------------------------------------------------------------
+        feed = chainlink.feed;
+        heartbeat = hasFeed ? chainlink.heartbeat : 0;
+        feedDecimals = fDecimals;
+        usdDenominated = usd;
+        ethUsdFeed = usd ? chainlink.ethUsdFeed : AggregatorV3Interface(address(0));
+        ethUsdHeartbeat = usd ? chainlink.ethUsdHeartbeat : 0;
+        ethUsdDecimals = eDecimals;
 
-    /// @notice ETH/USD feed, needed to convert USD-denominated token feeds into ETH.
-    function setEthUsdFeed(AggregatorV3Interface feed, uint32 heartbeat) external onlyOwner {
-        Feed memory f = _newFeed(feed, heartbeat, false);
-        (bool ok,) = _readFeed(f);
-        if (!ok) revert FeedUnusable(address(feed));
-        ethUsdFeed = f;
-        emit EthUsdFeedSet(address(feed), heartbeat);
-    }
-
-    /// @param usdDenominated true for a TOKEN/USD feed, false for a TOKEN/ETH feed.
-    function setChainlinkFeed(address token, AggregatorV3Interface feed, uint32 heartbeat, bool usdDenominated)
-        external
-        onlyOwner
-    {
-        if (token == address(0)) revert ZeroAddress();
-        if (usdDenominated && address(ethUsdFeed.feed) == address(0)) revert EthUsdFeedNotSet();
-
-        Feed memory f = _newFeed(feed, heartbeat, usdDenominated);
-        (bool ok,) = _readFeed(f);
-        if (!ok) revert FeedUnusable(address(feed));
-
-        tokenDecimals[token] = IERC20Metadata(token).decimals();
-        chainlinkFeeds[token] = f;
-        emit ChainlinkFeedSet(token, address(feed), heartbeat, usdDenominated);
-    }
-
-    function removeChainlinkFeed(address token) external onlyOwner {
-        delete chainlinkFeeds[token];
-        emit ChainlinkFeedRemoved(token);
-    }
-
-    /// @notice Uniswap v3 token/WETH pool used when the Chainlink feed is unavailable.
-    function setTwapPool(address token, IUniswapV3Pool pool, uint32 window) external onlyOwner {
-        if (token == address(0) || address(pool) == address(0)) revert ZeroAddress();
-        if (window < MIN_TWAP_WINDOW) revert TwapWindowTooShort(window, MIN_TWAP_WINDOW);
-
-        address token0 = pool.token0();
-        address token1 = pool.token1();
-        bool pairsTokenWithWeth = (token0 == token && token1 == weth) || (token0 == weth && token1 == token);
-        if (!pairsTokenWithWeth) revert PoolDoesNotPairTokenWithWeth(address(pool), token);
-
-        // Reverts ("OLD") if the pool doesn't keep enough history for this window yet.
-        _twapTick(pool, window);
-
-        twapPools[token] = Twap(pool, window);
-        emit TwapPoolSet(token, address(pool), window);
-    }
-
-    function removeTwapPool(address token) external onlyOwner {
-        delete twapPools[token];
-        emit TwapPoolRemoved(token);
+        twapPool = twap.pool;
+        twapWindow = hasTwap ? twap.window : 0;
     }
 
     // ---------------------------------------------------------------------
     // IPriceOracle
     // ---------------------------------------------------------------------
 
-    function isSupported(address token) external view returns (bool) {
-        return token == weth || address(chainlinkFeeds[token].feed) != address(0)
-            || address(twapPools[token].pool) != address(0);
+    function isSupported(address asset) external view returns (bool) {
+        return asset == token || asset == weth;
     }
 
-    function valueInWei(address token, uint256 amount) external view returns (uint256) {
-        if (amount == 0 || token == weth) return amount;
+    function valueInWei(address asset, uint256 amount) external view returns (uint256) {
+        if (amount == 0 || asset == weth) return amount;
+        if (asset != token) revert UnsupportedToken(asset);
 
-        Feed memory feed = chainlinkFeeds[token];
-        if (address(feed.feed) != address(0)) {
-            (bool ok, uint256 value) = _chainlinkValue(token, amount, feed);
+        if (address(feed) != address(0)) {
+            (bool ok, uint256 value) = _chainlinkValue(amount);
             if (ok) return value;
         }
-
-        Twap memory twap = twapPools[token];
-        if (address(twap.pool) != address(0)) {
-            return _twapValue(token, amount, twap);
+        if (address(twapPool) != address(0)) {
+            return _twapValue(amount);
         }
-
-        revert PriceUnavailable(token);
+        revert PriceUnavailable(asset);
     }
 
     // ---------------------------------------------------------------------
     // Chainlink
     // ---------------------------------------------------------------------
 
-    function _newFeed(AggregatorV3Interface feed, uint32 heartbeat, bool usdDenominated)
-        internal
-        view
-        returns (Feed memory)
-    {
-        if (address(feed) == address(0)) revert ZeroAddress();
-        if (heartbeat == 0) revert InvalidHeartbeat();
-        return Feed(feed, heartbeat, feed.decimals(), usdDenominated);
+    function _validateFeed(AggregatorV3Interface f, uint32 maxAge) internal view returns (uint8 decimals) {
+        if (maxAge == 0) revert InvalidHeartbeat();
+        decimals = f.decimals();
+        (bool ok,) = _readFeed(f, maxAge);
+        if (!ok) revert FeedUnusable(address(f));
     }
 
-    /// @dev Never reverts for a configured feed: returns ok=false on a bad, stale, or reverting read.
-    function _readFeed(Feed memory f) internal view returns (bool ok, uint256 price) {
-        try f.feed.latestRoundData() returns (uint80, int256 answer, uint256, uint256 updatedAt, uint80) {
+    /// @dev Never reverts: returns ok=false on a bad, stale, or reverting read.
+    function _readFeed(AggregatorV3Interface f, uint32 maxAge) internal view returns (bool ok, uint256 price) {
+        try f.latestRoundData() returns (uint80, int256 answer, uint256, uint256 updatedAt, uint80) {
             if (answer <= 0 || updatedAt == 0 || updatedAt > block.timestamp) return (false, 0);
-            if (block.timestamp - updatedAt > f.heartbeat) return (false, 0);
+            if (block.timestamp - updatedAt > maxAge) return (false, 0);
             return (true, uint256(answer));
         } catch {
             return (false, 0);
         }
     }
 
-    function _chainlinkValue(address token, uint256 amount, Feed memory f)
-        internal
-        view
-        returns (bool ok, uint256 valueWei)
-    {
-        (bool priceOk, uint256 price) = _readFeed(f);
+    function _chainlinkValue(uint256 amount) internal view returns (bool ok, uint256 valueWei) {
+        (bool priceOk, uint256 price) = _readFeed(feed, heartbeat);
         if (!priceOk) return (false, 0);
 
         // amount / 10^tokenDecimals * price / 10^feedDecimals, scaled to 18 decimals
-        uint256 scale = 10 ** (uint256(tokenDecimals[token]) + f.feedDecimals);
+        uint256 scale = 10 ** (uint256(tokenDecimals) + feedDecimals);
         uint256 value18 = FullMath.mulDiv(amount, price * 1e18, scale);
 
-        if (!f.usdDenominated) return (true, value18); // already ETH, 18 decimals = wei
+        if (!usdDenominated) return (true, value18); // already ETH with 18 decimals = wei
 
-        Feed memory e = ethUsdFeed;
-        (bool ethOk, uint256 ethUsd) = _readFeed(e);
+        (bool ethOk, uint256 ethUsd) = _readFeed(ethUsdFeed, ethUsdHeartbeat);
         if (!ethOk) return (false, 0);
         // value18 is USD with 18 decimals; divide by the ETH price to get wei
-        return (true, FullMath.mulDiv(value18, 10 ** e.feedDecimals, ethUsd));
+        return (true, FullMath.mulDiv(value18, 10 ** ethUsdDecimals, ethUsd));
     }
 
     // ---------------------------------------------------------------------
@@ -215,8 +195,8 @@ contract ChainlinkTwapOracle is IPriceOracle, Ownable2Step {
 
     /// @dev Converts `amount` of `token` into WETH (= wei) at the TWAP tick.
     ///      A tick's price is token1 per token0 in raw units, so decimals cancel out.
-    function _twapValue(address token, uint256 amount, Twap memory t) internal view returns (uint256) {
-        int24 tick = _twapTick(t.pool, t.window);
+    function _twapValue(uint256 amount) internal view returns (uint256) {
+        int24 tick = _twapTick(twapPool, twapWindow);
         uint160 sqrtPriceX96 = TickMath.getSqrtPriceAtTick(tick);
         bool tokenIsToken0 = token < weth; // v3 pools sort tokens by address
 

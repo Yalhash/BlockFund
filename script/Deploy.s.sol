@@ -3,13 +3,14 @@ pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
 import {BlockFund} from "../src/BlockFund.sol";
-import {ChainlinkTwapOracle} from "../src/oracles/ChainlinkTwapOracle.sol";
-import {IPriceOracle} from "../src/interfaces/IPriceOracle.sol";
+import {PriceSourceRegistry} from "../src/oracles/PriceSourceRegistry.sol";
+import {IPriceSourceRegistry} from "../src/interfaces/IPriceSourceRegistry.sol";
 
-/// @notice Deploys the price oracle and the BlockFund factory, both owned by OWNER.
+/// @notice Deploys the price source registry (owned by OWNER) and the BlockFund factory
+///         (no owner; it reads price sources from the registry).
 /// Env vars:
-///   OWNER - admin of both contracts. Must be a deployed multisig (e.g. a Safe) on any
-///           chain except a local anvil chain (chain id 31337), where a plain wallet is fine.
+///   OWNER - admin of the registry. Must be a deployed multisig (e.g. a Safe) on any chain
+///           except a local anvil chain (chain id 31337), where a plain wallet is fine.
 ///   WETH  - wrapped ETH on the target chain
 ///
 /// Price sources are then added by OWNER through the Safe (see README).
@@ -19,7 +20,7 @@ import {IPriceOracle} from "../src/interfaces/IPriceOracle.sol";
 contract Deploy is Script {
     uint256 constant LOCAL_CHAIN_ID = 31337;
 
-    function run() external returns (ChainlinkTwapOracle oracle, BlockFund fund) {
+    function run() external returns (PriceSourceRegistry registry, BlockFund fund) {
         address owner = vm.envAddress("OWNER");
         address weth = vm.envAddress("WETH");
 
@@ -31,12 +32,12 @@ contract Deploy is Script {
         }
 
         vm.startBroadcast();
-        oracle = new ChainlinkTwapOracle(owner, weth);
-        fund = new BlockFund(owner, IPriceOracle(address(oracle)));
+        registry = new PriceSourceRegistry(owner, weth);
+        fund = new BlockFund(IPriceSourceRegistry(address(registry)));
         vm.stopBroadcast();
 
-        console.log("Owner (multisig):   ", owner);
-        console.log("ChainlinkTwapOracle:", address(oracle));
-        console.log("BlockFund:          ", address(fund));
+        console.log("Registry owner (multisig):", owner);
+        console.log("PriceSourceRegistry:      ", address(registry));
+        console.log("BlockFund:                ", address(fund));
     }
 }

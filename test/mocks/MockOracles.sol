@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {IPriceOracle} from "../../src/interfaces/IPriceOracle.sol";
+import {IPriceSourceRegistry} from "../../src/interfaces/IPriceSourceRegistry.sol";
 
 /// @dev Chainlink-style feed with settable answer/timestamp.
 contract MockAggregator {
@@ -94,5 +95,14 @@ contract MockPriceOracle is IPriceOracle {
         require(!shouldRevert, "price unavailable");
         require(supported[token], "unsupported");
         return amount * weiPerToken[token] / 1e18;
+    }
+}
+
+/// @dev IPriceSourceRegistry with a settable mapping, for factory tests.
+contract MockRegistry is IPriceSourceRegistry {
+    mapping(address => IPriceOracle) public oracleFor;
+
+    function set(address token, IPriceOracle oracle) external {
+        oracleFor[token] = oracle;
     }
 }

@@ -2,45 +2,41 @@
 pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 
 import {SimpleCampaign} from "./SimpleCampaign.sol";
 import {TokenCampaign} from "./TokenCampaign.sol";
 import {MixedCampaign} from "./MixedCampaign.sol";
 import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
+import {IPriceSourceRegistry} from "./interfaces/IPriceSourceRegistry.sol";
 
 /**
  * @title Block Fund
  * @notice Factory that deploys one contract per campaign. Anyone can create a campaign.
- * @dev Mixed campaigns are limited to tokens the price oracle supports. Each mixed campaign
- *      keeps the oracle it was created with; `setOracle` only affects new campaigns.
+ * @dev Mixed campaigns are limited to tokens listed in the price source registry. A mixed
+ *      campaign copies the token's oracle address when it's created, and those oracles are
+ *      immutable, so nobody (including the admin) can change an existing campaign's price
+ *      sources. The registry itself is fixed at deployment for the same reason.
  *
- *      Admin: intended to be owned by a multisig (e.g. a Safe). Ownership transfers are
- *      two-step: `transferOwnership(new)`, then the new owner calls `acceptOwnership()`,
- *      so a typo'd address can't take over admin rights.
+ *      The factory has no owner and no admin functions. The only admin surface is the
+ *      registry, which is owned by a multisig.
  */
-contract BlockFund is Ownable2Step {
+contract BlockFund {
     enum CampaignType {
         SIMPLE,
         TOKEN,
         MIXED
     }
 
-    IPriceOracle public oracle;
+    IPriceSourceRegistry public immutable registry;
 
     event CampaignCreated(address indexed campaign, CampaignType indexed campaignType, address indexed campaignOwner);
-    event OracleChanged(address oracle);
 
     error ZeroAddress();
     error UnsupportedToken(address token);
 
-    constructor(address initialOwner, IPriceOracle oracle_) Ownable(initialOwner) {
-        _setOracle(oracle_);
-    }
-
-    function setOracle(IPriceOracle oracle_) external onlyOwner {
-        _setOracle(oracle_);
+    constructor(IPriceSourceRegistry registry_) {
+        if (address(registry_) == address(0)) revert ZeroAddress();
+        registry = registry_;
     }
 
     /// @param deadline Unix timestamp; must be in the future and within MAX_DURATION.
@@ -67,15 +63,10 @@ contract BlockFund is Ownable2Step {
         external
         returns (address)
     {
-        if (!oracle.isSupported(address(token))) revert UnsupportedToken(address(token));
+        IPriceOracle oracle = registry.oracleFor(address(token));
+        if (address(oracle) == address(0)) revert UnsupportedToken(address(token));
         MixedCampaign campaign = new MixedCampaign(campaignOwner, token, oracle, goalWei, deadline);
         emit CampaignCreated(address(campaign), CampaignType.MIXED, campaignOwner);
         return address(campaign);
-    }
-
-    function _setOracle(IPriceOracle oracle_) internal {
-        if (address(oracle_) == address(0)) revert ZeroAddress();
-        oracle = oracle_;
-        emit OracleChanged(address(oracle_));
     }
 }
