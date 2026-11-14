@@ -1,67 +1,45 @@
 // SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.20;
 
-pragma solidity >=0.8.2 <0.9.0;
+import {CampaignBase} from "./CampaignBase.sol";
 
 /**
  * @title Simple Campaign
- * @dev A simple campaign which accepts donations, and allows withdrawing donations.
- *      Adding an array to store the addresses of the donators and then creating 
- *      a global refund button which could be pressed by the creator is an option,
- *      but this could increase gas costs. Instead I prefer aborting the campaign 
- *      and allowing the users to withdraw their donations, which they can do at any time anyways 
-
+ * @notice ETH-only campaign. `goal` is in wei.
  */
-contract SimpleCampaign {
-    address payable owner;
-    uint256 goal;
-    uint256 collected;
-    bool active;
-    mapping(address => uint256) refund_mapping;
+contract SimpleCampaign is CampaignBase {
+    uint256 public collected;
+    mapping(address donor => uint256 amount) public donations;
 
-    event DonationRecieved(address donator, uint256 donation_wei);
-    event DonationRefunded(address donator, uint256 refund_wei, address refund_address);
+    constructor(address payable owner_, uint256 goalWei, uint256 deadline_) CampaignBase(owner_, goalWei, deadline_) {}
 
-    constructor(address payable owner_, uint256 goal_wei) {
-        owner = owner_;
-        goal = goal_wei;
-        active = true;
-        collected = 0;
-    }
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "This function is only accessible by the owner");
-        _;
-    }
-
-    modifier onlyActiveCampaign() {
-        require (active, "This function can only be accessed while a campaign is active");
-        _;
-    }
-
-    function donate() public payable onlyActiveCampaign {
-        require(msg.value > 0, "Must include a donation");
+    function donate() external payable nonReentrant acceptingDonations {
+        if (msg.value == 0) revert ZeroDonation();
         collected += msg.value;
-        refund_mapping[msg.sender] += msg.value;
-        emit DonationRecieved(msg.sender, msg.value);
+        donations[msg.sender] += msg.value;
+        emit DonationReceived(msg.sender, ETH, msg.value);
     }
 
-    function settleCampaign() public onlyOwner onlyActiveCampaign {
-        require(collected >= goal, "The campaign goal has not been reached yet.");
-        active = false;
-        owner.transfer(collected);
+    function totalRaised() public view override returns (uint256) {
+        return collected;
     }
 
-    function withdrawDonation(address payable refund_address, uint256 refund_wei) public {
-        require(!active, "The campaign must be aborted to allow refunds");
-        require(refund_mapping[msg.sender] >= refund_wei, "Message sender has donated less than the requested wei");
-        collected -= refund_wei;
-        refund_mapping[msg.sender] -= refund_wei;
-        refund_address.transfer(refund_wei);
-        emit DonationRefunded(msg.sender, refund_wei, refund_address);
+    function _payOut(address payable to) internal override {
+        uint256 amount = collected;
+        if (amount == 0) revert NothingToClaim();
+
+        collected = 0;
+        emit FundsClaimed(to, ETH, amount);
+        _sendEth(to, amount);
     }
 
-    // Abort the campaign early, donators can still withdraw their donations
-    function abortCampaign() public onlyOwner {
-        active = false;
+    function _refund(address donor, address payable to) internal override {
+        uint256 amount = donations[donor];
+        if (amount == 0) revert NothingToRefund();
+
+        donations[donor] = 0;
+        collected -= amount;
+        emit DonationRefunded(donor, ETH, amount, to);
+        _sendEth(to, amount);
     }
 }

@@ -2,26 +2,42 @@
 pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {BlockFund} from "../src/BlockFund.sol";
+import {PriceSourceRegistry} from "../src/oracles/PriceSourceRegistry.sol";
+import {IPriceSourceRegistry} from "../src/interfaces/IPriceSourceRegistry.sol";
 
-/// @notice Deploys the BlockFund factory.
+/// @notice Deploys the price source registry (owned by OWNER) and the BlockFund factory
+///         (no owner; it reads price sources from the registry).
 /// Env vars:
-///   OWNER        - address that will own the factory
-///   POOL_MANAGER - Uniswap v4 PoolManager on the target chain (any address works
-///                  locally if you only use Simple/Token campaigns)
+///   OWNER - admin of the registry. Must be a deployed multisig (e.g. a Safe) on any chain
+///           except a local anvil chain (chain id 31337), where a plain wallet is fine.
+///   WETH  - wrapped ETH on the target chain
+///
+/// Price sources are then added by OWNER through the Safe (see README).
 ///
 /// Example:
-///   forge script script/Deploy.s.sol --rpc-url $SEPOLIA_RPC_URL --account <keystore-name> --broadcast
+///   forge script script/Deploy.s.sol --rpc-url $SEPOLIA_RPC_URL --account deployer --broadcast
 contract Deploy is Script {
-    function run() external returns (BlockFund fund) {
+    uint256 constant LOCAL_CHAIN_ID = 31337;
+
+    function run() external returns (PriceSourceRegistry registry, BlockFund fund) {
         address owner = vm.envAddress("OWNER");
-        address poolManager = vm.envAddress("POOL_MANAGER");
+        address weth = vm.envAddress("WETH");
+
+        if (block.chainid != LOCAL_CHAIN_ID) {
+            require(
+                owner.code.length > 0,
+                "OWNER has no contract code: use your Safe's address (and check it's deployed on this chain)"
+            );
+        }
 
         vm.startBroadcast();
-        fund = new BlockFund(owner, IPoolManager(poolManager));
+        registry = new PriceSourceRegistry(owner, weth);
+        fund = new BlockFund(IPriceSourceRegistry(address(registry)));
         vm.stopBroadcast();
 
-        console.log("BlockFund deployed at", address(fund));
+        console.log("Registry owner (multisig):", owner);
+        console.log("PriceSourceRegistry:      ", address(registry));
+        console.log("BlockFund:                ", address(fund));
     }
 }

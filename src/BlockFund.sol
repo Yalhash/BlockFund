@@ -1,83 +1,72 @@
 // SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.20;
 
-pragma solidity >=0.8.2 <0.9.0;
-// External
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
-import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
-using StateLibrary for IPoolManager;
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-
-// Internal
-import "./SimpleCampaign.sol";
-import "./TokenCampaign.sol";
-import "./MixedCampaign.sol";
-
-
+import {SimpleCampaign} from "./SimpleCampaign.sol";
+import {TokenCampaign} from "./TokenCampaign.sol";
+import {MixedCampaign} from "./MixedCampaign.sol";
+import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
+import {IPriceSourceRegistry} from "./interfaces/IPriceSourceRegistry.sol";
 
 /**
  * @title Block Fund
- * @dev Has the ability to create campaigns which accepts donations
-
+ * @notice Factory that deploys one contract per campaign. Anyone can create a campaign.
+ * @dev Mixed campaigns are limited to tokens listed in the price source registry. A mixed
+ *      campaign copies the token's oracle address when it's created, and those oracles are
+ *      immutable, so nobody (including the admin) can change an existing campaign's price
+ *      sources. The registry itself is fixed at deployment for the same reason.
+ *
+ *      The factory has no owner and no admin functions. The only admin surface is the
+ *      registry, which is owned by a multisig.
  */
 contract BlockFund {
-
-    mapping(Currency => PoolId) token_pools;
-    mapping(Currency => bool) private token_pool_added;
-    address public owner;
-    IPoolManager public immutable pool_manager;
-
-
     enum CampaignType {
         SIMPLE,
-        TOKEN
+        TOKEN,
+        MIXED
     }
 
-    event createdCampaign(address, CampaignType);
+    IPriceSourceRegistry public immutable registry;
 
-    modifier onlyOwner() {
-        require(msg.sender == owner, "This function is only accessible by the owner");
-        _;
+    event CampaignCreated(address indexed campaign, CampaignType indexed campaignType, address indexed campaignOwner);
+
+    error ZeroAddress();
+    error UnsupportedToken(address token);
+
+    constructor(IPriceSourceRegistry registry_) {
+        if (address(registry_) == address(0)) revert ZeroAddress();
+        registry = registry_;
     }
 
-    constructor(address _owner, IPoolManager _pool_manager) {
-        pool_manager = _pool_manager;
-        owner = _owner;
+    /// @param deadline Unix timestamp; must be in the future and within MAX_DURATION.
+    function createSimpleCampaign(address payable campaignOwner, uint256 goalWei, uint256 deadline)
+        external
+        returns (address)
+    {
+        SimpleCampaign campaign = new SimpleCampaign(campaignOwner, goalWei, deadline);
+        emit CampaignCreated(address(campaign), CampaignType.SIMPLE, campaignOwner);
+        return address(campaign);
     }
 
-
-    function addTokenPool(PoolId _pool, Currency _currency) public onlyOwner {
-        token_pools[_currency] = _pool;
-        token_pool_added[_currency] = true;
-        // Double check this is a valid pool, revert on failure
-        pool_manager.getSlot0(_pool); 
+    function createTokenCampaign(address payable campaignOwner, IERC20 token, uint256 goal, uint256 deadline)
+        external
+        returns (address)
+    {
+        TokenCampaign campaign = new TokenCampaign(campaignOwner, token, goal, deadline);
+        emit CampaignCreated(address(campaign), CampaignType.TOKEN, campaignOwner);
+        return address(campaign);
     }
 
-    function changeOwner(address _new_owner) public onlyOwner {
-        owner = _new_owner;
-    }
-    
-    function createSimpleCampaign(address payable campaign_owner, uint256 campaign_goal_wei) public returns (address) {
-        SimpleCampaign new_campaign = new SimpleCampaign(campaign_owner, campaign_goal_wei);
-        emit createdCampaign(address(new_campaign), CampaignType.SIMPLE);
-        return address(new_campaign);
-    }
-
-    function createTokenCampaign(address campaign_owner, IERC20 token, uint256 campaign_goal) public returns (address) {
-        TokenCampaign new_campaign = new TokenCampaign(campaign_owner, token, campaign_goal);
-        emit createdCampaign(address(new_campaign), CampaignType.TOKEN);
-        return address(new_campaign);
-    }
-
-    // A campaign which allows donations of ERC20 tokens and Ethereum
-    function createMixedCampaign(address payable campaign_owner, address token, uint256 campaign_goal_wei) public returns (address) {
-        Currency uni_currency = Currency.wrap(token);
-        require(token_pool_added[uni_currency], "Token is not supported!");
-
-        MixedCampaign new_campaign = new MixedCampaign(campaign_owner, pool_manager, token_pools[uni_currency], token, campaign_goal_wei);
-        emit createdCampaign(address(new_campaign), CampaignType.TOKEN);
-        return address(new_campaign);
+    /// @notice A campaign that accepts ETH and `token`, with the goal in wei.
+    function createMixedCampaign(address payable campaignOwner, IERC20 token, uint256 goalWei, uint256 deadline)
+        external
+        returns (address)
+    {
+        IPriceOracle oracle = registry.oracleFor(address(token));
+        if (address(oracle) == address(0)) revert UnsupportedToken(address(token));
+        MixedCampaign campaign = new MixedCampaign(campaignOwner, token, oracle, goalWei, deadline);
+        emit CampaignCreated(address(campaign), CampaignType.MIXED, campaignOwner);
+        return address(campaign);
     }
 }
